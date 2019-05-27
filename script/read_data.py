@@ -7,6 +7,10 @@ Created on Mon May 27 16:27:45 2019
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
+from sklearn.neighbors import NearestNeighbors
+from scipy.optimize import differential_evolution
+from scipy.stats import multivariate_normal
+
 
 def scan2cart(scan, X, angle_min, angle_increment, max_rays):
     # the robot orientation in relation to the world [m,m,rad]
@@ -38,14 +42,67 @@ def get_data():
     scans_array = np.array(scans_array.values)
     return odoms_array, scans_array_info, scans_array
 
+def obs2GMM(obs,res = 0.1,reg = 5e-5):
+    nn = int(np.ceil(res / np.mean(np.linalg.norm(np.diff(obs,axis = 0),axis = 1))))
+    if nn < 3:
+        print('resolution too small!')
+        return None, None
+    n = len(obs) -1
+    m = n//nn
+    idxs = np.linspace(0,n,m).astype(int)
+    Mus = obs[idxs].reshape((-1,2))
+    nbrs = NearestNeighbors(n_neighbors=nn, algorithm='ball_tree').fit(Mus)
+    Sigmas = []
+    for ii in range(m):
+        idxs = nbrs.kneighbors(Mus[ii].reshape((1,2)),n_neighbors = nn, return_distance=False)
+        c = np.cov(Mus[idxs].reshape((-1,2)).T) + reg*np.eye(2)
+        Sigmas.append(c)
+    return Mus, Sigmas
+
+class dendt():
+    def __init__(self,last_scan,new_scan,bounds, Mus, Sigmas, maxiter=200,popsize=6,tol=0.0001):
+        self.new_scan = new_scan
+        self.Mus, self.Sigmas = Mus, Sigmas
+        self.result = differential_evolution(self.func, bounds,maxiter=maxiter,popsize=popsize,tol=tol)
+        self.T = self.result.x
+    
+    def transform(self,X,T):
+        T = np.array(T).reshape(3)
+        c, s = np.cos(T[2]), np.sin(T[2])
+        j = np.matrix([[c, s], [-s, c]])
+        m = np.dot(j, X.T).T + T[0:2].T
+        return m
+    
+    def likelihood(self,X, T):
+        X = self.transform(X,T)
+        p = np.zeros(len(X))
+        for ii in range(len(self.Mus)):
+            p += multivariate_normal.pdf(X, mean = self.Mus[ii], cov = self.Sigmas[ii])
+        return p
+    
+    def func(self,T):
+        X = self.new_scan.T
+        return -np.sum(self.likelihood(X, T))
+
+
 
 odoms_array, scans_array_info, scans_array = get_data()
 
 X0 = [0.0, 0.0, 0.0]
 s0 = scan2cart(scans_array[0],X0, scans_array_info[0,1],scans_array_info[0,3],scans_array[0].shape[0])
 s1 = scan2cart(scans_array[100],X0, scans_array_info[100,1],scans_array_info[100,3],scans_array[100].shape[0])
-plt.scatter(s0[:,0],s0[:,1],c='k')
+
+bounds = [(-0.5,0.5),(-0.5,0.5),(-0.2,0.2)]
+mus, sigmas = obs2GMM(s0,0.5)
+Dendt = dendt(last_scan=s0.T,new_scan=s1.T,bounds=bounds,Mus = mus, Sigmas=sigmas, maxiter=4,popsize=4,tol=0.0001)
+s1T = np.array(Dendt.transform(s1,Dendt.T))
+
 plt.scatter(s1[:,0],s1[:,1],c='r')
+plt.scatter(s1T[:,0],s1T[:,1],c='b')
+plt.scatter(s0[:,0],s0[:,1],c='k')
+plt.scatter(mus[:,0],mus[:,1],c='y')
+
+
 
 
 
