@@ -84,7 +84,22 @@ class dendt():
         X = self.new_scan.T
         return -np.sum(self.likelihood(X, T))
 
+def likelihood(X, Mus, Sigmas):
+    p = np.zeros(len(X))
+    for ii in range(len(Mus)):
+        p += multivariate_normal.pdf(X, mean = Mus[ii], cov = Sigmas[ii])
+    return p 
 
+def update_map(new_scan, gmm_map, scan_TH = 1.0):
+    mus = gmm_map[0]
+    sigmas = gmm_map[1]
+    P = likelihood(new_scan, mus, sigmas)
+    new_scan = new_scan[P < scan_TH] 
+    mus_new, sigmas_new = obs2GMM(new_scan,0.5)
+    sigmas.append(sigmas_new)
+    mus = np.append(mus, mus_new, axis=0)
+    return mus, sigmas
+       
 
 odoms_array, scans_array_info, scans_array = get_data()
 
@@ -95,12 +110,22 @@ s1 = scan2cart(scans_array[100],X0, scans_array_info[100,1],scans_array_info[100
 bounds = [(-0.5,0.5),(-0.5,0.5),(-0.2,0.2)]
 mus, sigmas = obs2GMM(s0,0.5)
 Dendt = dendt(last_scan=s0.T,new_scan=s1.T,bounds=bounds,Mus = mus, Sigmas=sigmas, maxiter=4,popsize=4,tol=0.0001)
-s1T = np.array(Dendt.transform(s1,Dendt.T))
+X0 += Dendt.T
+s2 = scan2cart(scans_array[200],X0, scans_array_info[200,1],scans_array_info[200,3],scans_array[200].shape[0])
+mus, sigmas = obs2GMM(s1,0.5)
+bounds = [(-0.5+X0[0],0.5+X0[0]),(-0.5+X0[1],0.5+X0[1]),(-0.2+X0[2],0.2+X0[2])]
+Dendt = dendt(last_scan=s1.T,new_scan=s2.T,bounds=bounds,Mus = mus, Sigmas=sigmas, maxiter=4,popsize=4,tol=0.0001)
 
-plt.scatter(s1[:,0],s1[:,1],c='r')
-plt.scatter(s1T[:,0],s1T[:,1],c='b')
-plt.scatter(s0[:,0],s0[:,1],c='k')
+s2T = np.array(Dendt.transform(s2,Dendt.T))
+
+mus, sigmas = update_map(s2T,gmm_map=(mus, sigmas))
+
+plt.scatter(s2[:,0],s2[:,1],c='r')
+plt.scatter(s2T[:,0],s2T[:,1],c='b')
+plt.scatter(s1[:,0],s1[:,1],c='k')
 plt.scatter(mus[:,0],mus[:,1],c='y')
+
+
 
 
 
