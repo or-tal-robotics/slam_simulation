@@ -94,37 +94,48 @@ def update_map(new_scan, gmm_map, scan_TH = 1.0):
     mus = gmm_map[0]
     sigmas = gmm_map[1]
     P = likelihood(new_scan, mus, sigmas)
+    if len(new_scan) < 3:
+        print('scan threshold (scan_TH) is too small!')
     new_scan = new_scan[P < scan_TH] 
     mus_new, sigmas_new = obs2GMM(new_scan,0.5)
-    sigmas.append(sigmas_new)
-    mus = np.append(mus, mus_new, axis=0)
+    if mus_new is not None:
+        sigmas.append(sigmas_new)
+        mus = np.append(mus, mus_new, axis=0)
     return mus, sigmas
-       
 
-odoms_array, scans_array_info, scans_array = get_data()
+def main():
+    
+    odoms_array, scans_array_info, scans_array = get_data()
+    
+    X0 = [0.0, 0.0, 0.0]
+    Ns = 1
+    
+    for ii in range (0,100,Ns):
+        s0 = scan2cart(scans_array[ii],X0, scans_array_info[ii,1],scans_array_info[ii,3],scans_array[ii].shape[0])
+        s1 = scan2cart(scans_array[ii+Ns],X0, scans_array_info[ii+Ns,1],scans_array_info[ii+Ns,3],scans_array[ii+Ns].shape[0])
+        
+        bounds = [(-0.5,0.5),(-0.5,0.5),(-0.2,0.2)]
+        mus, sigmas = obs2GMM(s0,0.5)
+        Dendt = dendt(last_scan=s0.T,new_scan=s1.T,bounds=bounds,Mus = mus, Sigmas=sigmas, maxiter=4,popsize=4,tol=0.0001)
+        X0 += Dendt.T
+        s2 = scan2cart(scans_array[ii+Ns*2],X0, scans_array_info[ii+Ns*2,1],scans_array_info[ii+Ns*2,3],scans_array[ii+Ns*2].shape[0])
+        mus, sigmas = obs2GMM(s1,0.5)
+        
+        bounds = [(-0.5+X0[0],0.5+X0[0]),(-0.5+X0[1],0.5+X0[1]),(-0.2+X0[2],0.2+X0[2])]
+        Dendt = dendt(last_scan=s1.T,new_scan=s2.T,bounds=bounds,Mus = mus, Sigmas=sigmas, maxiter=4,popsize=4,tol=0.0001)
+        
+        s2T = np.array(Dendt.transform(s2,Dendt.T))
+        
+        mus, sigmas = update_map(s2T,gmm_map=(mus, sigmas))
+        
+    plt.scatter(s2[:,0],s2[:,1],c='r')
+    plt.scatter(s2T[:,0],s2T[:,1],c='b')
+    plt.scatter(s1[:,0],s1[:,1],c='k')
+    plt.scatter(mus[:,0],mus[:,1],c='y')
+    plt.show()
 
-X0 = [0.0, 0.0, 0.0]
-s0 = scan2cart(scans_array[0],X0, scans_array_info[0,1],scans_array_info[0,3],scans_array[0].shape[0])
-s1 = scan2cart(scans_array[100],X0, scans_array_info[100,1],scans_array_info[100,3],scans_array[100].shape[0])
-
-bounds = [(-0.5,0.5),(-0.5,0.5),(-0.2,0.2)]
-mus, sigmas = obs2GMM(s0,0.5)
-Dendt = dendt(last_scan=s0.T,new_scan=s1.T,bounds=bounds,Mus = mus, Sigmas=sigmas, maxiter=4,popsize=4,tol=0.0001)
-X0 += Dendt.T
-s2 = scan2cart(scans_array[200],X0, scans_array_info[200,1],scans_array_info[200,3],scans_array[200].shape[0])
-mus, sigmas = obs2GMM(s1,0.5)
-bounds = [(-0.5+X0[0],0.5+X0[0]),(-0.5+X0[1],0.5+X0[1]),(-0.2+X0[2],0.2+X0[2])]
-Dendt = dendt(last_scan=s1.T,new_scan=s2.T,bounds=bounds,Mus = mus, Sigmas=sigmas, maxiter=4,popsize=4,tol=0.0001)
-
-s2T = np.array(Dendt.transform(s2,Dendt.T))
-
-mus, sigmas = update_map(s2T,gmm_map=(mus, sigmas))
-
-plt.scatter(s2[:,0],s2[:,1],c='r')
-plt.scatter(s2T[:,0],s2T[:,1],c='b')
-plt.scatter(s1[:,0],s1[:,1],c='k')
-plt.scatter(mus[:,0],mus[:,1],c='y')
-
+if __name__== "__main__":
+    main()
 
 
 
