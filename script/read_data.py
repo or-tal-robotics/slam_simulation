@@ -11,6 +11,7 @@ from sklearn.neighbors import NearestNeighbors
 from scipy.optimize import differential_evolution
 from scipy.stats import multivariate_normal
 import matplotlib.animation as animation
+import time
 
 def find_nearest(array, value):
     array = np.asarray(array)
@@ -53,7 +54,7 @@ def get_data():
     scans_array = np.array(scans_array.values)
     return odoms_array, scans_array_info, scans_array
 
-def obs2GMM(obs,res = 0.1,reg = 5e-5):
+def obs2GMM(obs,res = 0.1,reg = 5e-3):
     nn = int(np.ceil(res / np.mean(np.linalg.norm(np.diff(obs,axis = 0),axis = 1))))
     if nn < 3:
         print('resolution too small!')
@@ -101,9 +102,8 @@ def likelihood(gmm_map, scan):
     x_max, y_max, x_min, y_min = np.max(scan[:,0]), np.max(scan[:,1]), np.min(scan[:,0]), np.min(scan[:,1])
     idxs = np.argwhere((Mus[:,0]<x_max)*(Mus[:,0]>x_min)*(Mus[:,1]<y_max)*(Mus[:,1]>y_min))
     idxs = idxs.reshape(-1).astype(int)
-    print(idxs)
-    print(Mus[idxs])
-    Mus, Sigmas = Mus[idxs], Sigmas[idxs]
+    Mus = Mus[idxs]
+    Sigmas = np.array(Sigmas)[idxs]
     p = np.zeros(len(scan))
     for ii in range(len(Mus)):
         p += multivariate_normal.pdf(scan, mean = Mus[ii], cov = Sigmas[ii])
@@ -112,7 +112,7 @@ def likelihood(gmm_map, scan):
 def update_map(gmm_map, new_scan, res = 0.5):
     Mus, Sigmas = gmm_map[0], gmm_map[1]
     P = likelihood(gmm_map, new_scan)
-    new_scan = new_scan[P < 5.0]
+    new_scan = new_scan[P < 0.01]
     if new_scan.shape[0] < 10:
         return Mus, Sigmas
     new_mus, new_sigmas = obs2GMM(new_scan,res=res)
@@ -126,8 +126,8 @@ class MCL():
     def __init__(self,Np = 100, X0 = np.zeros(3), P0 = np.eye(3)):
         self.Np = Np
         self.init(X0,P0)
-        self.v_std = 0.2
-        self.omega_std = 0.2
+        self.v_std = 0.03
+        self.omega_std = 0.02
         
     def init(self, X0, P0):
         self.X = np.random.multivariate_normal(X0, P0, self.Np)
@@ -148,17 +148,17 @@ class MCL():
             _, indices = knn.kneighbors(scanT)
             p = np.zeros(len(scanT))
             for ii in range(len(indices)):
-                p += multivariate_normal.pdf(scanT[ii], mean = Mus[int(indices[ii])], cov = Sigmas[int(indices[ii])]) + 1e-10
-            self.W[i] = np.prod(p) 
+                p += multivariate_normal.pdf(scanT[ii], mean = Mus[int(indices[ii])], cov = 0.01*np.eye(2)) + 1e-10
+            self.W[i] = (np.prod(p))
         self.W = self.W/np.sum(self.W)
         
     def resample(self):
         index = np.random.choice(a = self.Np,size = self.Np,p = self.W)
         self.X = self.X[index]
         self.W = np.ones(self.Np) / self.Np
-        self.X[:,0] += 0.0001 * np.random.randn(self.Np) 
-        self.X[:,1] += 0.0001 * np.random.randn(self.Np) 
-        self.X[:,2] += 0.0001 * np.random.randn(self.Np) 
+        #self.X[:,0] += 0.0001 * np.random.randn(self.Np) 
+        #self.X[:,1] += 0.0001 * np.random.randn(self.Np) 
+        #self.X[:,2] += 0.0001 * np.random.randn(self.Np) 
         
     def MMSE(self):
         return np.mean(self.X.T*self.W, axis = 1)
@@ -178,30 +178,41 @@ bounds = [(-0.5,0.5),(-0.5,0.5),(-0.2,0.2)]
 mus_last, sigmas_last = obs2GMM(s0,0.5)
 mus, sigmas = mus_last, sigmas_last
 X = X0
-mcl = MCL(Np = 100, X0 = np.zeros(3), P0 = 0.01*np.eye(3) )
-for ii in range(201,1000):
+mcl = MCL(Np = 200, X0 = np.zeros(3), P0 = 0.001*np.eye(3) )
+for ii in range(201,len(scans_array_info),2):
     v , omega = get_odom_at_time(scans_array_info[ii,0])
-    dt = scans_array_info[ii,0] - scans_array_info[ii-1,0]
+    dt = scans_array_info[ii,0] - scans_array_info[ii-2,0]
     mcl.predict( v, omega, dt)
-    if ii%2 ==0:
-        mcl.update(gmm_map = (mus, sigmas), scan = scans_array[ii],scan_info= scans_array_info[ii],max_rays= 20)
-    x_std = np.std(mcl.X[:,0])*3
-    y_std = np.std(mcl.X[:,1])*3
-    theta_std = np.std(mcl.X[:,2])*3
-    s = scan2cart(scans_array[ii],mcl.MAP(), scans_array_info[ii,1],scans_array_info[ii,3],scans_array[ii].shape[0])
-    bounds = [(-x_std ,x_std ),(-y_std ,y_std ),(-theta_std,theta_std )]
-    Dendt = dendt(new_scan=s.T,bounds=bounds,Mus = mus_last, Sigmas=sigmas_last, maxiter=4,popsize=4,tol=0.0001)
-    sT = np.array(Dendt.transform(s,Dendt.T))
-    mus_last, sigmas_last = obs2GMM(sT,0.5)
     
-    if ii%5 ==0:
+    t0 = time.time()
+    mcl.update(gmm_map = (mus, sigmas), scan = scans_array[ii],scan_info= scans_array_info[ii],max_rays= 30)
+    print('mcl.update  took: '+str(time.time() - t0))
+    mcl.resample()
+    
+    
+    
+    
+    if ii%15 ==0:
+        x_std = np.std(mcl.X[:,0])*3 + 0.1
+        y_std = np.std(mcl.X[:,1])*3 + 0.1
+        theta_std = np.std(mcl.X[:,2])*3 + 0.05
+        s = scan2cart(scans_array[ii],mcl.MAP(), scans_array_info[ii,1],scans_array_info[ii,3],scans_array[ii].shape[0])
+        sb = scan2cart(scans_array[ii],mcl.MAP(), scans_array_info[ii,1],scans_array_info[ii,3],100)
+        bounds = [(-x_std ,x_std ),(-y_std ,y_std ),(-theta_std,theta_std )]
+        t0 = time.time()
+        Dendt = dendt(new_scan=sb.T,bounds=bounds,Mus = mus, Sigmas=sigmas, maxiter=6,popsize=6,tol=0.0001)
+        print('DENDT  took: '+str(time.time() - t0))
+    
+        sT = np.array(Dendt.transform(s,Dendt.T))
+        t0 = time.time()
         mus, sigmas = update_map(gmm_map = (mus, sigmas), new_scan = sT,res= 1.0)
-        mcl.resample()
+        print('update_map  took: '+str(time.time() - t0))
+        
    
     
     plt.clf()
     plt.scatter(mus[:,0],mus[:,1],c='k')
-    plt.scatter(sT[:,0],sT[:,1],c='r')
+    #plt.scatter(sT[:,0],sT[:,1],c='r')
     plt.scatter(mcl.X[:,0],mcl.X[:,1],c='b')
     plt.draw()
     plt.pause(0.001)
