@@ -10,6 +10,7 @@ import numpy as np
 from sklearn.neighbors import NearestNeighbors
 from scipy.optimize import differential_evolution
 from scipy.stats import multivariate_normal
+import matplotlib.animation as animation
 
 def find_nearest(array, value):
     array = np.asarray(array)
@@ -96,17 +97,23 @@ class dendt():
 
 
 def likelihood(gmm_map, scan):
-    p = np.zeros(len(scan))
     Mus, Sigmas = gmm_map[0], gmm_map[1]
+    x_max, y_max, x_min, y_min = np.max(scan[:,0]), np.max(scan[:,1]), np.min(scan[:,0]), np.min(scan[:,1])
+    idxs = np.argwhere((Mus[:,0]<x_max)*(Mus[:,0]>x_min)*(Mus[:,1]<y_max)*(Mus[:,1]>y_min))
+    idxs = idxs.reshape(-1).astype(int)
+    print(idxs)
+    print(Mus[idxs])
+    Mus, Sigmas = Mus[idxs], Sigmas[idxs]
+    p = np.zeros(len(scan))
     for ii in range(len(Mus)):
         p += multivariate_normal.pdf(scan, mean = Mus[ii], cov = Sigmas[ii])
-    return p
+    return p/len(Mus)
 
 def update_map(gmm_map, new_scan, res = 0.5):
     Mus, Sigmas = gmm_map[0], gmm_map[1]
     P = likelihood(gmm_map, new_scan)
-    new_scan = new_scan[P < 10.0]
-    if new_scan.shape[0] < 2:
+    new_scan = new_scan[P < 5.0]
+    if new_scan.shape[0] < 10:
         return Mus, Sigmas
     new_mus, new_sigmas = obs2GMM(new_scan,res=res)
     if new_sigmas is None:
@@ -119,16 +126,16 @@ class MCL():
     def __init__(self,Np = 100, X0 = np.zeros(3), P0 = np.eye(3)):
         self.Np = Np
         self.init(X0,P0)
-        self.v_std = 0.01
-        self.omega_std = 0.01
+        self.v_std = 0.2
+        self.omega_std = 0.2
         
     def init(self, X0, P0):
         self.X = np.random.multivariate_normal(X0, P0, self.Np)
         self.W = np.ones(self.Np) / self.Np
         
     def predict(self, v, omega, dt):
-        V = np.random.normal(v, self.v_std)
-        O = np.random.normal(omega, self.omega_std)
+        V = np.random.normal(v, self.v_std, self.Np)
+        O = np.random.normal(omega, self.omega_std, self.Np)
         self.X[:,0] = self.X[:,0] + np.multiply(V,np.cos(self.X[:,2]))*dt
         self.X[:,1] = self.X[:,1] + np.multiply(V,np.sin(self.X[:,2]))*dt
         self.X[:,2] = self.X[:,2] + O*dt
@@ -140,10 +147,18 @@ class MCL():
             scanT = scan2cart(scan,self.X[i], scan_info[1], scan_info[3], max_rays)
             _, indices = knn.kneighbors(scanT)
             p = np.zeros(len(scanT))
-            for ii in range(len(Mus)):
-                p += multivariate_normal.pdf(scanT[ii], mean = Mus[int(indices[ii])], cov = Sigmas[int(indices[ii])])
-            self.W[i] = np.prod(p) + 1e-10
+            for ii in range(len(indices)):
+                p += multivariate_normal.pdf(scanT[ii], mean = Mus[int(indices[ii])], cov = Sigmas[int(indices[ii])]) + 1e-10
+            self.W[i] = np.prod(p) 
         self.W = self.W/np.sum(self.W)
+        
+    def resample(self):
+        index = np.random.choice(a = self.Np,size = self.Np,p = self.W)
+        self.X = self.X[index]
+        self.W = np.ones(self.Np) / self.Np
+        self.X[:,0] += 0.0001 * np.random.randn(self.Np) 
+        self.X[:,1] += 0.0001 * np.random.randn(self.Np) 
+        self.X[:,2] += 0.0001 * np.random.randn(self.Np) 
         
     def MMSE(self):
         return np.mean(self.X.T*self.W, axis = 1)
@@ -152,6 +167,10 @@ class MCL():
         return self.X[np.argmax(self.W)]
         
 odoms_array, scans_array_info, scans_array = get_data()
+
+plt.axis([-50,50,-50,50])
+plt.ion()
+plt.show()
 
 X0 = [0.0, 0.0, 0.0]
 s0 = scan2cart(scans_array[200],X0, scans_array_info[200,1],scans_array_info[200,3],scans_array[200].shape[0])
@@ -164,28 +183,30 @@ for ii in range(201,1000):
     v , omega = get_odom_at_time(scans_array_info[ii,0])
     dt = scans_array_info[ii,0] - scans_array_info[ii-1,0]
     mcl.predict( v, omega, dt)
-    s = scan2cart(scans_array[ii],mcl.MMSE(), scans_array_info[ii,1],scans_array_info[ii,3],scans_array[ii].shape[0])
+    if ii%2 ==0:
+        mcl.update(gmm_map = (mus, sigmas), scan = scans_array[ii],scan_info= scans_array_info[ii],max_rays= 20)
+    x_std = np.std(mcl.X[:,0])*3
+    y_std = np.std(mcl.X[:,1])*3
+    theta_std = np.std(mcl.X[:,2])*3
+    s = scan2cart(scans_array[ii],mcl.MAP(), scans_array_info[ii,1],scans_array_info[ii,3],scans_array[ii].shape[0])
+    bounds = [(-x_std ,x_std ),(-y_std ,y_std ),(-theta_std,theta_std )]
     Dendt = dendt(new_scan=s.T,bounds=bounds,Mus = mus_last, Sigmas=sigmas_last, maxiter=4,popsize=4,tol=0.0001)
     sT = np.array(Dendt.transform(s,Dendt.T))
     mus_last, sigmas_last = obs2GMM(sT,0.5)
-    bounds = [(-0.05 ,0.05 ),(-0.05 ,0.05 ),(-0.05,0.05 )]
-    mus, sigmas = update_map(gmm_map = (mus, sigmas), new_scan = sT,res= 1.0)
-    mcl.update(gmm_map = (mus, sigmas), scan = scans_array[ii],scan_info= scans_array_info[ii],max_rays= 20)
+    
+    if ii%5 ==0:
+        mus, sigmas = update_map(gmm_map = (mus, sigmas), new_scan = sT,res= 1.0)
+        mcl.resample()
+   
+    
+    plt.clf()
     plt.scatter(mus[:,0],mus[:,1],c='k')
     plt.scatter(sT[:,0],sT[:,1],c='r')
-    plt.scatter(X[0],X[1],c='b')
-    plt.show()
+    plt.scatter(mcl.X[:,0],mcl.X[:,1],c='b')
+    plt.draw()
+    plt.pause(0.001)
+    
 
-mus, sigmas = obs2GMM(s0,0.5)
-Dendt = dendt(last_scan=s0.T,new_scan=s1.T,bounds=bounds,Mus = mus, Sigmas=sigmas, maxiter=4,popsize=4,tol=0.0001)
-s1T = np.array(Dendt.transform(s1,Dendt.T))
-new_mus, new_sigmas = update_map((mus, sigmas),s1T,1.0)
-plt.scatter(new_mus[:,0],new_mus[:,1],c='y')
-
-plt.scatter(s1[:,0],s1[:,1],c='r')
-plt.scatter(s1T[:,0],s1T[:,1],c='b')
-plt.scatter(s0[:,0],s0[:,1],c='k')
-plt.scatter(mus[:,0],mus[:,1],c='y')
 
 
 
