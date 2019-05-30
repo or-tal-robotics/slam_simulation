@@ -2,8 +2,8 @@
 % scans_array_info: time, min angle, max angle, angle increment
 % scans_array: ranges
 
-bag = rosbag('../raw_data/slam3d_bag.bag');
-scan_Sel = select(bag,'Topic','/scan');
+bag = rosbag('../raw_data/pcl.bag');
+scan_Sel = select(bag,'Topic','/output_point_cloud');
 odom_Sel = select(bag,'Topic','/odom');
 scans = readMessages(scan_Sel);
 odoms = readMessages(odom_Sel);
@@ -18,11 +18,11 @@ for ii = 1:length(odoms)
 end
 
 for ii = 1:length(scans)
-   scans_array_info(ii,1) = scans{ii,1}.Header.Stamp.Sec + scans{ii,1}.Header.Stamp.Nsec*10^-9;
-   scans_array_info(ii,2) = scans{ii,1}.AngleMin;
-   scans_array_info(ii,3) = scans{ii,1}.AngleMax;
-   scans_array_info(ii,4) = scans{ii,1}.AngleIncrement;
-   scans_array(ii,:) = scans{ii,1}.Ranges;
+   scans_array_info(ii) = scans{ii,1}.Header.Stamp.Sec + scans{ii,1}.Header.Stamp.Nsec*10^-9;
+   for jj = 1:length(scans{ii,1}.Points)
+       scans_array(ii,jj,:) = double([scans{ii,1}.Points(jj,1).X, scans{ii,1}.Points(jj,1).Y, scans{ii,1}.Points(jj,1).Z]);
+   end
+   
 end
 
 csvwrite('odoms_array.csv',odoms_array);
