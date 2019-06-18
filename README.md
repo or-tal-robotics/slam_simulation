@@ -19,5 +19,4 @@ You may use the `read_data.py` file in the `scrip` directory. It contains exampl
  You can (and should) change or modify my code in order to learn and try staff on your own.
  If you do that, please create a new branch or fork this repository.
  
- Good luck,
- Or.
+ Good luck!
